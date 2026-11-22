@@ -1,11 +1,19 @@
 // Pure layout engine; operates on LiteGraph-like nodes and links.
 export function arrange(nodes, links, options = {}) {
-  const o = {horizontal: 140, vertical: 55, mode: 'balanced', helpers: true, weights: true, ...options};
+  const o = {horizontal: 140, vertical: 55, mode: 'balanced', helpers: true, weights: true, lockX: false, lockY: false, direction: 'horizontal', passes: 6, ...options};
   const ns = [...nodes], byId = new Map(ns.map(n => [String(n.id), n]));
+  if (!ns.length) return new Map();
   const edges = links.map(l => ({a: byId.get(String(l.origin_id)), b: byId.get(String(l.target_id)), slot: l.target_slot ?? 0})).filter(e => e.a && e.b && e.a !== e.b);
   const incoming = new Map(ns.map(n => [n, []])), outgoing = new Map(ns.map(n => [n, []]));
   for (const e of edges) { outgoing.get(e.a).push(e); incoming.get(e.b).push(e); }
-  const size = n => [Math.max(40, Number(n.size?.[0]) || 200), Math.max(30, Number(n.size?.[1]) || 80)];
+  // Vertical flow transposes the working space; positions are swapped back at the end.
+  const vertical = o.direction === 'vertical';
+  const swap = p => [p[1], p[0]];
+  const posOf = n => { const p = [Number(n.pos?.[0]) || 0, Number(n.pos?.[1]) || 0]; return vertical ? swap(p) : p; };
+  const size = n => { const s = [Math.max(40, Number(n.size?.[0]) || 200), Math.max(30, Number(n.size?.[1]) || 80)]; return vertical ? swap(s) : s; };
+  const origX = n => posOf(n)[0], origY = n => posOf(n)[1];
+  // Real-axis locks mapped onto working axes.
+  const lockWx = vertical ? !!o.lockY : !!o.lockX, lockWy = vertical ? !!o.lockX : !!o.lockY;
   const targetsOf = n => [...new Set(outgoing.get(n).map(e => e.b))];
   const sourcesOf = n => [...new Set(incoming.get(n).map(e => e.a))];
   // Primitives (no inputs) and output nodes (no outputs) with a single counterpart are free to move and snap close to it.
@@ -19,11 +27,6 @@ export function arrange(nodes, links, options = {}) {
     if (free.has(n)) return 0.25;
     return 1 + 0.6 * new Set([...sourcesOf(n), ...targetsOf(n)]).size + 0.4 * Math.min(2, size(n)[0] * size(n)[1] / 16000);
   };
-  if (!main.length) {
-    const result = new Map(ns.map(n => [n, [...n.pos]]));
-    for (const s of freeSinks) { const src = sourcesOf(s)[0], p = result.get(src); result.set(s, [p[0] + size(src)[0] + 40, p[1]]); }
-    return result;
-  }
   // Condense strongly connected components so unusual cyclic graphs remain bounded.
   let counter = 0; const idx = new Map(), low = new Map(), stack = [], on = new Set(), components = [];
   function visit(v) { idx.set(v,counter); low.set(v,counter++); stack.push(v); on.add(v);
@@ -36,17 +39,17 @@ export function arrange(nodes, links, options = {}) {
   const indeg=ins.map(s=>s.size), queue=indeg.map((v,i)=>v===0?i:-1).filter(i=>i>=0), rank=components.map(()=>0);
   for(let k=0;k<queue.length;k++){const a=queue[k];for(const b of outs[a]){rank[b]=Math.max(rank[b],rank[a]+1);if(--indeg[b]===0)queue.push(b);}}
   const layers=[]; for(const n of main){const r=rank[comp.get(n)];(layers[r]??=[]).push(n);}
-  const origY=n=>Number(n.pos?.[1])||0; layers.forEach(l=>l.sort((a,b)=>origY(a)-origY(b)));
+  layers.forEach(l=>l.sort((a,b)=>origY(a)-origY(b)));
   // Repeated barycentric sweeps reduce crossings while the original order breaks ties.
   // Neighbour mass pulls light nodes toward heavy hubs; a node's own mass damps its movement (inertia).
-  for(let pass=0;pass<6;pass++){const forward=pass%2===0, order=forward?layers:[...layers].reverse();
+  for(let pass=0;pass<o.passes;pass++){const forward=pass%2===0, order=forward?layers:[...layers].reverse();
     for(const layer of order){const positions=new Map();layers.forEach(l=>l.forEach((n,i)=>positions.set(n,i)));
       const score=n=>{const es=forward?incoming.get(n):outgoing.get(n), neighbors=es.map(e=>forward?e.a:e.b).filter(x=>positions.has(x)&&rank[comp.get(x)]!==rank[comp.get(n)]);
         if(!neighbors.length)return positions.get(n);
         let num=0,den=0;for(const x of neighbors){const m=mass(x);num+=m*positions.get(x);den+=m;}
         return (num+mass(n)*positions.get(n))/(den+mass(n));};
       layer.sort((a,b)=>score(a)-score(b)||origY(a)-origY(b));}}
-  const minX=Math.min(...ns.map(n=>Number(n.pos?.[0])||0)), minY=Math.min(...ns.map(origY));
+  const minX=Math.min(...ns.map(origX)), minY=Math.min(...ns.map(origY));
   // Reserve a source column left of each layer and a sink column right of it for free nodes.
   const sourceFor=new Map(main.map(n=>[n,freeSources.filter(h=>targetsOf(h)[0]===n)]));
   const sinkFor=new Map(main.map(n=>[n,freeSinks.filter(s=>sourcesOf(s)[0]===n)]));
@@ -59,13 +62,20 @@ export function arrange(nodes, links, options = {}) {
   for(let i=0;i<layers.length;i++){let y=minY;
     for(const n of layers[i]){const hs=sourceFor.get(n);const hh=hs.reduce((s,h)=>s+size(h)[1]+o.vertical,0);const block=Math.max(size(n)[1],hh?hh-o.vertical:0); if(o.mode==='balanced'){y=Math.max(y,origY(n)); result.set(n,[xs[i],y]);} else result.set(n,[xs[i],y+(block-size(n)[1])/2]);let hy=y;for(const h of hs){result.set(h,[xs[i]-40-size(h)[0],hy]);hy+=size(h)[1]+o.vertical;}y+=block+o.vertical;}
     for(const n of layers[i]){let sy=result.get(n)[1];for(const s of sinkFor.get(n)){result.set(s,[sinkXs[i],sy]);sy+=size(s)[1]+o.vertical;}}}
-  for(const h of freeSources){if(!result.has(h))result.set(h,[...h.pos]);const p=result.get(h);let sy=p[1];for(const s of freeSinks.filter(s=>sourcesOf(s)[0]===h)){result.set(s,[p[0]+size(h)[0]+40,sy]);sy+=size(s)[1]+o.vertical;}}
-  // Locked and out-of-scope nodes are obstacles. Heavy nodes are placed first and keep their spot; lighter blocks move down around them.
+  for(const h of freeSources){if(!result.has(h))result.set(h,posOf(h));const p=result.get(h);let sy=p[1];for(const s of freeSinks.filter(s=>sourcesOf(s)[0]===h)){result.set(s,[p[0]+size(h)[0]+40,sy]);sy+=size(s)[1]+o.vertical;}}
+  // Locked axes keep the original coordinate; collision resolution then uses the other axis.
+  if(lockWx||lockWy) for(const [n,p] of result){if(lockWx)p[0]=origX(n);if(lockWy)p[1]=origY(n);result.set(n,p);}
+  // Locked and out-of-scope nodes are obstacles. Heavy nodes are placed first and keep their spot; lighter blocks move around them.
   const locked=n=>!!n.properties?.magikArrangeLocked;
   const obstacles=(options.obstacles||[]).concat(ns.filter(locked));
-  for(const n of ns.filter(locked)) result.set(n,[...n.pos]);
-  const placed=obstacles.map(n=>({n,p:n.pos,s:size(n)}));
+  for(const n of ns.filter(locked)) result.set(n,posOf(n));
+  const placed=obstacles.map(n=>({n,p:posOf(n),s:size(n)}));
   const movable=[...main,...free].filter(n=>!locked(n)).sort((a,b)=>mass(b)-mass(a));
-  for(const n of movable){let p=result.get(n);if(!p)continue;const s=size(n);let attempts=0, moved=true;while(moved&&attempts++<placed.length+2){moved=false;for(const q of placed){if(p[0]<q.p[0]+q.s[0]+20&&p[0]+s[0]+20>q.p[0]&&p[1]<q.p[1]+q.s[1]+20&&p[1]+s[1]+20>q.p[1]){p=[p[0],q.p[1]+q.s[1]+o.vertical];moved=true;}}}result.set(n,p);placed.push({n,p,s});}
+  for(const n of movable){let p=result.get(n);if(!p)continue;const s=size(n);
+    if(!(lockWx&&lockWy)){let attempts=0, moved=true;
+      while(moved&&attempts++<placed.length+2){moved=false;
+        for(const q of placed){if(p[0]<q.p[0]+q.s[0]+20&&p[0]+s[0]+20>q.p[0]&&p[1]<q.p[1]+q.s[1]+20&&p[1]+s[1]+20>q.p[1]){p=lockWy?[q.p[0]+q.s[0]+20,p[1]]:[p[0],q.p[1]+q.s[1]+o.vertical];moved=true;}}}}
+    result.set(n,p);placed.push({n,p,s});}
+  if(vertical) for(const [n,p] of result) result.set(n,swap(p));
   return result;
 }
