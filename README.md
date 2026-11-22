@@ -12,7 +12,7 @@ Right-click empty canvas for **Magik Auto Arrange: entire workflow** or **select
 
 Choose spacing and whether to compact small source helpers. Click **Preview** to temporarily move nodes; **Cancel** or Escape restores positions; **Apply** commits the positions. Settings are remembered in the browser. Locked nodes and nodes outside the chosen scope are obstacles. Lock status is saved as a node property in the workflow.
 
-The layout condenses cycles, orders connected nodes into left-to-right layers, uses repeated crossing-reduction passes, keeps small single-consumer sources near their target, and avoids node overlaps. It does not change node connections or execute the workflow. Applying calls the graph's before/after change hooks for undo on compatible frontends.
+The layout condenses cycles, orders connected nodes into left-to-right layers, and uses repeated crossing-reduction passes. Nodes with many connections (samplers, hubs) carry more simulated weight and inertia, so their neighbours gather around them while they resist being displaced; primitive nodes (no inputs) and output nodes (no outputs) are free to move and snap close to their single source or target. Overlaps are avoided by shifting the lighter node. The **Anchor heavy nodes** option toggles the weighting. It does not change node connections or execute the workflow. Applying calls the graph's before/after change hooks for undo on compatible frontends.
 
 ## Current limitations
 
